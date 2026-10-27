@@ -1,0 +1,202 @@
+name: Build sing-box reF1nd Kernels
+
+on:
+  schedule:
+    - cron: '0 20 * * *' # 每天北京时间凌晨 4:00 自动检查上游编译
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制编译即使上游未更新 (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  matrix-build:
+    name: Build (${{ matrix.channel }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: stable
+            branch: reF1nd-stable
+            tag_label: STABLE
+            tag_color: "3066993" # 绿色 0x2ecc71
+            title_prefix: "🟢 [STABLE 稳定版]"
+          - channel: testing
+            branch: reF1nd-testing
+            tag_label: TESTING
+            tag_color: "15967250" # 橙黄色 0xf39c12
+            title_prefix: "🟡 [TESTING 测试版]"
+
+    env:
+      BUILD_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,with_ech,badlinkname,tfogo_checklinkname0
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_CHANNEL_ID: "1563925052477677679"
+
+    steps:
+      - name: Checkout Builder Repo
+        uses: actions/checkout@v4
+
+      - name: Check Upstream Commit
+        id: check_upstream
+        run: |
+          UPSTREAM_API="https://api.github.com/repos/reF1nd/sing-box/commits/${{ matrix.branch }}"
+          LATEST_SHA=$(curl -s $UPSTREAM_API | jq -r .sha)
+          echo "Latest commit on ${{ matrix.branch }}: $LATEST_SHA"
+          echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          
+          RECORD_FILE="build_records/${{ matrix.channel }}.sha"
+          mkdir -p build_records
+          LAST_SHA=""
+          if [ -f "$RECORD_FILE" ]; then
+            LAST_SHA=$(cat "$RECORD_FILE")
+          fi
+          
+          if [ "$LATEST_SHA" = "$LAST_SHA" ] && [ "${{ github.event.inputs.force_build }}" != "true" ]; then
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "Upstream has not changed since last build ($LAST_SHA). Skipping."
+          else
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Clone Upstream Source
+        if: steps.check_upstream.outputs.should_build == 'true'
+        run: |
+          git clone --depth=1 -b ${{ matrix.branch }} https://github.com/reF1nd/sing-box.git upstream_source
+
+      - name: Setup Go
+        if: steps.check_upstream.outputs.should_build == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+
+      - name: Setup Android NDK
+        if: steps.check_upstream.outputs.should_build == 'true'
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+
+      - name: Compile Android ARM64 Kernel
+        if: steps.check_upstream.outputs.should_build == 'true'
+        run: |
+          cd upstream_source
+          export CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang
+          export CXX=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang++
+          
+          VERSION=$(CGO_ENABLED=0 go run ./cmd/internal/read_tag)
+          if [ -z "$VERSION" ]; then
+            VERSION="v1.15.0-custom"
+          fi
+          echo "Building Version: $VERSION"
+          echo "build_version=$VERSION" >> $GITHUB_ENV
+          
+          TAGS="${{ env.BUILD_TAGS }}"
+          LDFLAGS="-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=$VERSION"
+          
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -v \
+            -trimpath \
+            -tags "$TAGS" \
+            -ldflags "$LDFLAGS" \
+            -o ../sing-box \
+            ./cmd/sing-box
+
+      - name: Package Kernel
+        if: steps.check_upstream.outputs.should_build == 'true'
+        run: |
+          mkdir -p output
+          mv sing-box output/
+          cd output
+          TAR_NAME="sing-box-${{ matrix.channel }}-android-arm64.tar.gz"
+          tar -czvf "$TAR_NAME" sing-box
+          FILE_SIZE=$(ls -lh "$TAR_NAME" | awk '{print $5}')
+          echo "tar_name=$TAR_NAME" >> $GITHUB_ENV
+          echo "file_size=$FILE_SIZE" >> $GITHUB_ENV
+          echo "tar_path=$(pwd)/$TAR_NAME" >> $GITHUB_ENV
+          sha256sum "$TAR_NAME" > "${TAR_NAME}.sha256"
+
+      - name: Create or Update GitHub Release
+        if: steps.check_upstream.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "kernel-${{ matrix.channel }}"
+          name: "${{ matrix.title_prefix }} ${{ env.build_version }}"
+          body: |
+            ### sing-box reF1nd 内核自动化构建 (${{ matrix.tag_label }})
+            - **上游分支**: `${{ matrix.branch }}`
+            - **上游 Commit**: `${{ steps.check_upstream.outputs.latest_sha }}`
+            - **内核版本**: `${{ env.build_version }}`
+            - **编译标签 (Tags)**: `${{ env.BUILD_TAGS }}`
+            - **文件大小**: `${{ env.file_size }}`
+            - **架构**: `Android arm64 (API 35, NDK r29)`
+          files: |
+            output/${{ env.tar_name }}
+            output/${{ env.tar_name }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Build Record
+        if: steps.check_upstream.outputs.should_build == 'true'
+        run: |
+          echo "${{ steps.check_upstream.outputs.latest_sha }}" > "build_records/${{ matrix.channel }}.sha"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build_records/${{ matrix.channel }}.sha
+          git commit -m "chore(record): update ${{ matrix.channel }} commit to ${{ steps.check_upstream.outputs.latest_sha }}" || exit 0
+          git push origin main || exit 0
+
+      - name: Send Discord Push Notification
+        if: steps.check_upstream.outputs.should_build == 'true'
+        run: |
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/kernel-${{ matrix.channel }}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/kernel-${{ matrix.channel }}/${{ env.tar_name }}"
+          
+          python3 - << 'PYEOF'
+          import os, json, urllib.request
+          
+          token = os.environ.get('DISCORD_BOT_TOKEN')
+          channel_id = os.environ.get('DISCORD_CHANNEL_ID')
+          title_prefix = "${{ matrix.title_prefix }}"
+          channel_name = "${{ matrix.channel }}".upper()
+          version = os.environ.get('build_version')
+          sha = "${{ steps.check_upstream.outputs.latest_sha }}"[:8]
+          size = os.environ.get('file_size')
+          tags = os.environ.get('BUILD_TAGS')
+          rel_url = "${{ github.repository }}"
+          dl_url = f"https://github.com/{rel_url}/releases/download/kernel-${{ matrix.channel }}/${os.environ.get('tar_name')}"
+          
+          embed = {
+              "title": f"{title_prefix} 内核自动化构建完成",
+              "color": int("${{ matrix.tag_color }}"),
+              "fields": [
+                  {"name": "版本", "value": f"`{version}`", "inline": True},
+                  {"name": "分支", "value": f"`${{ matrix.branch }}` (`{sha}`)", "inline": True},
+                  {"name": "文件大小", "value": f"`{size}`", "inline": True},
+                  {"name": "目标架构", "value": "`Android arm64 (API 35 NDK)`", "inline": True},
+                  {"name": "精简标签 (Tags)", "value": f"`{tags}`", "inline": False},
+                  {"name": "下载直链", "value": f"[点击直接下载 {os.environ.get('tar_name')}]({dl_url})\n[查看 Release 页面](https://github.com/{rel_url}/releases/tag/kernel-${{ matrix.channel }})", "inline": False}
+              ],
+              "footer": {
+                  "text": "sing-box reF1nd CI · Powered by Hermes"
+              }
+          }
+          
+          payload = {"embeds": [embed]}
+          
+          req = urllib.request.Request(
+              f"https://discord.com/api/v10/channels/{channel_id}/messages",
+              data=json.dumps(payload).encode('utf-8'),
+              headers={
+                  "Authorization": f"Bot {token}",
+                  "Content-Type": "application/json",
+                  "User-Agent": "DiscordBot"
+              },
+              method="POST"
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print("Discord notification sent! Status:", resp.status)
+          except Exception as e:
+              print("Failed to send Discord notification:", e)
+          PYEOF
