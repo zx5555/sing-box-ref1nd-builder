@@ -10,6 +10,9 @@ on:
         required: false
         default: 'true'
 
+permissions:
+  contents: write
+
 jobs:
   matrix-build:
     name: Build (${{ matrix.channel }})
@@ -30,7 +33,7 @@ jobs:
             title_prefix: "🟡 [TESTING 测试版]"
 
     env:
-      BUILD_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,with_ech,badlinkname,tfogo_checklinkname0
+      BUILD_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,badlinkname,tfogo_checklinkname0
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       DISCORD_CHANNEL_ID: "1563925052477677679"
 
