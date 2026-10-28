@@ -152,37 +152,57 @@ jobs:
       - name: Send Discord Push Notification
         if: steps.check_upstream.outputs.should_build == 'true'
         run: |
-          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/kernel-${{ matrix.channel }}"
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/kernel-${{ matrix.channel }}/${{ env.tar_name }}"
-          
           python3 - << 'PYEOF'
-          import os, json, urllib.request
+          import os, json, datetime, urllib.request
           
           token = os.environ.get('DISCORD_BOT_TOKEN')
           channel_id = os.environ.get('DISCORD_CHANNEL_ID')
           title_prefix = "${{ matrix.title_prefix }}"
-          channel_name = "${{ matrix.channel }}".upper()
+          channel_label = "${{ matrix.tag_label }}"
+          branch = "${{ matrix.branch }}"
           version = os.environ.get('build_version')
           sha = "${{ steps.check_upstream.outputs.latest_sha }}"[:8]
           size = os.environ.get('file_size')
-          tags = os.environ.get('BUILD_TAGS')
-          rel_url = "${{ github.repository }}"
-          dl_url = f"https://github.com/{rel_url}/releases/download/kernel-${{ matrix.channel }}/${os.environ.get('tar_name')}"
+          tar_name = os.environ.get('tar_name')
+          repo = "${{ github.repository }}"
+          rel_url = f"https://github.com/{repo}/releases/tag/kernel-${{ matrix.channel }}"
+          dl_url = f"https://github.com/{repo}/releases/download/kernel-${{ matrix.channel }}/{tar_name}"
+          color_code = int("${{ matrix.tag_color }}")
+          
+          tags_str = "QUIC ｜ uTLS ｜ Clash API ｜ eBPF ｜ ECH"
           
           embed = {
-              "title": f"{title_prefix} 内核自动化构建完成",
-              "color": int("${{ matrix.tag_color }}"),
+              "title": f"🛡️ sing-box reF1nd 内核编译成功",
+              "url": rel_url,
+              "description": f"渠道: {channel_label} ｜ 架构: Android arm64 (API 35 NDK)",
+              "color": color_code,
+              "thumbnail": {
+                  "url": "https://sing-box.sagernet.org/assets/logo.png"
+              },
               "fields": [
-                  {"name": "版本", "value": f"`{version}`", "inline": True},
-                  {"name": "分支", "value": f"`${{ matrix.branch }}` (`{sha}`)", "inline": True},
-                  {"name": "文件大小", "value": f"`{size}`", "inline": True},
-                  {"name": "目标架构", "value": "`Android arm64 (API 35 NDK)`", "inline": True},
-                  {"name": "精简标签 (Tags)", "value": f"`{tags}`", "inline": False},
-                  {"name": "下载直链", "value": f"[点击直接下载 {os.environ.get('tar_name')}]({dl_url})\n[查看 Release 页面](https://github.com/{rel_url}/releases/tag/kernel-${{ matrix.channel }})", "inline": False}
+                  {
+                      "name": "📦 版本与构建标识",
+                      "value": (
+                          f"• **内核版本**: **{version}**\n"
+                          f"• **上游分支**: `{branch}` (Commit `{sha}`)\n"
+                          f"• **产物体积**: **{size}** (精简优化版)\n\n"
+                          f"  • 编译特性: {tags_str}"
+                      ),
+                      "inline": False
+                  },
+                  {
+                      "name": "🚀 产物交付与直链",
+                      "value": (
+                          f"• **安装包直链**: [📥 点击直接下载 {tar_name}]({dl_url})\n"
+                          f"• **发行版页面**: [🔗 查看 GitHub Releases 页面]({rel_url})"
+                      ),
+                      "inline": False
+                  }
               ],
               "footer": {
-                  "text": "sing-box reF1nd CI · Powered by Hermes"
-              }
+                  "text": "sing-box reF1nd CI · Hermes 自动化中枢"
+              },
+              "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
           }
           
           payload = {"embeds": [embed]}
