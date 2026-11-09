@@ -33,7 +33,7 @@ jobs:
             title_prefix: "🟡 [TESTING 测试版]"
 
     env:
-      BUILD_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,with_tailscale,badlinkname,tfogo_checklinkname0
+      BUILD_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,with_tailscale,with_gvisor,badlinkname,tfogo_checklinkname0
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       DISCORD_CHANNEL_ID: "1563925052477677679"
 
@@ -169,7 +169,7 @@ jobs:
           dl_url = f"https://github.com/{repo}/releases/download/kernel-${{ matrix.channel }}/{tar_name}"
           color_code = int("${{ matrix.tag_color }}")
           
-          tags_str = "QUIC ｜ uTLS ｜ Clash API ｜ eBPF ｜ Tailscale"
+          tags_str = "QUIC ｜ uTLS ｜ Clash API ｜ eBPF ｜ Tailscale ｜ gVisor"
           
           embed = {
               "title": f"🛡️ sing-box reF1nd 内核编译成功",
